@@ -1,3 +1,6 @@
+import time
+t0 = time.time()
+accumulated_training_time = 0
 import argparse
 import os
 import shutil
@@ -140,6 +143,8 @@ def main():
     iteration, trained_samples = 0, 0
     total_samples = len(train_loader.dataset) * args.batch_size
     lr = args.lr
+    t1 = time.time()
+    print("[profiling] init time: {}s".format(t1-t0))
     for epoch in range(args.start_epoch, args.epochs):
         beg_time = time.time()
 
@@ -198,7 +203,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     end = time.time()
     one_batch_time_beg, one_batch_time_end = 0, 0
     for i, (input, target) in enumerate(train_loader):
-
+        t0 = time.time()
         if args.profiling and one_batch_time_beg == 0:
             one_batch_time_beg = time.time()
 
@@ -243,6 +248,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if args.profiling and one_batch_time_end == 0:
             one_batch_time_end = time.time()
             one_batch_time = one_batch_time_end - one_batch_time_beg
+        
+        t1 = time.time()
+        accumulated_training_time += t1 - t0
+        print("[profiling] step time: {}s, accumuated training time: {}s".format(t1 - t0, accumulated_training_time))
 
     if args.profiling:
         return losses.avg, one_batch_time
