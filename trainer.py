@@ -17,6 +17,7 @@ import torchvision.datasets as datasets
 import resnet
 import logging
 import sys
+import re
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -38,7 +39,7 @@ parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', '--epoch', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
-parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
+parser.add_argument('--start-epoch', default=1, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('-b', '--batch_size', default=128, type=int,
                     metavar='N', help='mini-batch size (default: 128)')
@@ -50,7 +51,7 @@ parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('--print-freq', '-p', default=50, type=int,
                     metavar='N', help='print frequency (default: 50)')
-parser.add_argument('--resume', default='', type=str, metavar='PATH',
+parser.add_argument('--resume', default='output', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
@@ -60,12 +61,36 @@ parser.add_argument('--half', dest='half', action='store_true',
                     help='use half-precision(16-bit) ')
 parser.add_argument('--save-dir', dest='save_dir',
                     help='The directory used to save the trained models',
-                    default='save_temp', type=str)
+                    default='output', type=str)
 parser.add_argument('--save-every', dest='save_every',
                     help='Saves checkpoints at every specified number of epochs',
-                    type=int, default=10)
+                    type=int, default=1)
 best_prec1 = 0
 
+def most_recent_weights(weights_folder):
+    """
+        return most recent created weights file
+        if folder is empty return empty string
+    """
+    weight_files = os.listdir(weights_folder)
+    if len(weight_files) == 0:
+        return 0
+
+    regex_str = r'(\d+)'
+
+    # sort files by epoch
+    weight_files = sorted(weight_files, key=lambda w: int(re.search(regex_str, w).groups()[0]))
+
+    return weight_files[-1]
+
+def last_epoch(weights_folder):
+    weight_file = most_recent_weights(weights_folder)
+    if not weight_file:
+        return 0
+        #raise Exception('no recent weights were found')
+    resume_epoch = int(weight_file.split('-')[0])
+
+    return resume_epoch
 
 def main():
     global args, best_prec1
@@ -80,7 +105,7 @@ def main():
     model.cuda()
 
     # optionally resume from a checkpoint
-    if args.resume:
+    """if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
@@ -90,7 +115,13 @@ def main():
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.evaluate, checkpoint['epoch']))
         else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            print("=> no checkpoint found at '{}'".format(args.resume))"""
+    checkpoint_path = 'output/checkpoint'
+    if not os.path.exists(checkpoint_path):
+        os.makedirs(checkpoint_path)
+    resume_epoch = 0
+    resume_epoch = last_epoch(os.path.join(checkpoint_path))
+    checkpoint_dir = os.path.join(checkpoint_path, '{epoch}')
 
     cudnn.benchmark = True
 
@@ -127,7 +158,7 @@ def main():
                                 weight_decay=args.weight_decay)
 
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-                                                        milestones=[100, 150], last_epoch=args.start_epoch - 1)
+                                                        milestones=[100, 150], last_epoch=args.start_epoch - 2)
 
     if args.arch in ['resnet1202', 'resnet110']:
         # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
@@ -145,7 +176,7 @@ def main():
     lr = args.lr
     t1 = time.time()
     print("[profiling] init time: {}s".format(t1-t0))
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(args.start_epoch, args.epochs + 1):
         beg_time = time.time()
 
         # train for one epoch
@@ -167,7 +198,7 @@ def main():
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
 
-        if epoch > 0 and epoch % args.save_every == 0:
+        """if epoch > 0 and epoch % args.save_every == 0:
             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
@@ -177,7 +208,21 @@ def main():
         save_checkpoint({
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
-        }, is_best, filename=os.path.join(args.save_dir, 'model.th'))
+        }, is_best, filename=os.path.join(args.save_dir, 'model.th'))"""
+        #start to save best performance model after learning rate decay to 0.01
+        os.mkdir(checkpoint_dir.format(epoch=epoch))
+        checkpoint_path = os.path.join(checkpoint_dir.format(epoch=epoch), 'checkpoint.pth')
+        if best_prec1 < prec1:
+            weights_path = checkpoint_path#.format(epoch=epoch)
+            logging.info('saving weights file to {}'.format(weights_path))
+            torch.save(model.state_dict(), weights_path)
+            best_prec1 = prec1
+            continue
+
+        if not epoch % args.save_every:
+            weights_path = checkpoint_path#.format(epoch=epoch)
+            logging.info('saving weights file to {}'.format(weights_path))
+            torch.save(model.state_dict(), weights_path)
 
         end_time = time.time()
         current_epoch_time = end_time - beg_time
@@ -192,6 +237,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     """
         Run one train epoch
     """
+    global accumulated_training_time
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
